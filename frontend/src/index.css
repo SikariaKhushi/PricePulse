@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Optional: Custom base styles */
+body {
+  background-color: #f3f4f6; /* Tailwind's gray-100 */
+  font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+}
