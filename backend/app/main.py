@@ -13,7 +13,7 @@ from .database import get_db, init_db
 from .models import *
 from .schemas import *
 from .scraper import ProductScraper, update_cross_platform_comparison
-from .scheduler import scheduler, schedule_product_scraping
+from .scheduler import scheduler, schedule_product_scraping, set_playwright_instance, get_scheduler_status
 from .auth import get_current_user, create_access_token, verify_password, get_password_hash
 from .email_service import send_price_drop_alert
 
@@ -41,11 +41,8 @@ async def startup_event():
     scheduler.start()
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-    
-    # Initialize Playwright and set global variable
-    from app.scheduler import playwright_instance
     app.state.playwright = await async_playwright().start()
-    playwright_instance = app.state.playwright  # Set global variable
+    set_playwright_instance(app.state.playwright)
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -304,6 +301,33 @@ async def get_price_comparison(
         ) for comp in comparisons
     ]
 
+@app.delete("/products/{product_id}", status_code=204)
+async def delete_product(
+    product_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # 1. Check if product exists
+    product = db.query(Product).filter(Product.product_id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    # 2. Remove associated price records and alerts (optional but recommended)
+    db.query(PriceRecord).filter(PriceRecord.product_id == product_id).delete()
+    db.query(Alert).filter(Alert.product_id == product_id).delete()
+    db.query(PlatformComparison).filter(PlatformComparison.product_id == product_id).delete()
+
+    # 3. Remove the product itself
+    db.delete(product)
+    db.commit()
+
+    # 4. Remove scheduled jobs for this product
+    from .scheduler import remove_product_jobs
+    remove_product_jobs(product_id)
+
+    # 5. No response body needed for 204
+    return
+
 # Alert Endpoints
 @app.post("/alerts/", response_model=AlertCreateResponse)
 async def create_alert(
@@ -453,6 +477,9 @@ async def get_scraping_errors(
         {"timestamp": "2024-05-22T07:00:00Z", "error": "Request blocked"},
         {"timestamp": "2024-05-21T21:00:00Z", "error": "Product unavailable"}
     ]
+@app.get("/health/scheduler")
+def scheduler_status():
+    return get_scheduler_status()
 
 @app.get("/")
 def read_root():
